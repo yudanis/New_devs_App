@@ -1,17 +1,41 @@
 from datetime import datetime
 from decimal import Decimal
 from typing import Dict, Any, List
+from zoneinfo import ZoneInfo
 
 async def calculate_monthly_revenue(property_id: str, month: int, year: int, db_session=None) -> Decimal:
     """
-    Calculates revenue for a specific month.
+    Calculates revenue for a specific month using property timezone.
     """
+    # Get property timezone from database
+    property_timezone = 'UTC'  # Default fallback
+    try:
+        from app.core.database_pool import DatabasePool
+        db_pool = DatabasePool()
+        await db_pool.initialize()
+        
+        if db_pool.session_factory:
+            async with db_pool.get_session() as session:
+                from sqlalchemy import text
+                
+                query = text("""
+                    SELECT timezone FROM properties 
+                    WHERE id = :property_id
+                """)
+                result = await session.execute(query, {"property_id": property_id})
+                row = result.fetchone()
+                if row and row.timezone:
+                    property_timezone = row.timezone
+    except Exception as e:
+        print(f"Warning: Could not fetch property timezone: {e}")
 
-    start_date = datetime(year, month, 1)
+    # Create timezone-aware dates for the month
+    tz = ZoneInfo(property_timezone)
+    start_date = datetime(year, month, 1, tzinfo=tz)
     if month < 12:
-        end_date = datetime(year, month + 1, 1)
+        end_date = datetime(year, month + 1, 1, tzinfo=tz)
     else:
-        end_date = datetime(year + 1, 1, 1)
+        end_date = datetime(year + 1, 1, 1, tzinfo=tz)
         
     print(f"DEBUG: Querying revenue for {property_id} from {start_date} to {end_date}")
 
@@ -88,17 +112,27 @@ async def calculate_total_revenue(property_id: str, tenant_id: str) -> Dict[str,
     except Exception as e:
         print(f"Database error for {property_id} (tenant: {tenant_id}): {e}")
         
-        # Create property-specific mock data for testing when DB is unavailable
-        # This ensures each property shows different figures
+        # Create tenant-specific mock data for testing when DB is unavailable
+        # This ensures each tenant gets different data even for same property_id
         mock_data = {
-            'prop-001': {'total': '1000.00', 'count': 3},
-            'prop-002': {'total': '4975.50', 'count': 4}, 
-            'prop-003': {'total': '6100.50', 'count': 2},
-            'prop-004': {'total': '1776.50', 'count': 4},
-            'prop-005': {'total': '3256.00', 'count': 3}
+            'tenant-a': {
+                'prop-001': {'total': '1000.00', 'count': 3},
+                'prop-002': {'total': '4975.50', 'count': 4}, 
+                'prop-003': {'total': '6100.50', 'count': 2},
+                'prop-004': {'total': '1776.50', 'count': 4},
+                'prop-005': {'total': '3256.00', 'count': 3}
+            },
+            'tenant-b': {
+                'prop-001': {'total': '2500.75', 'count': 5},
+                'prop-002': {'total': '8750.25', 'count': 7}, 
+                'prop-003': {'total': '4200.00', 'count': 3},
+                'prop-004': {'total': '9500.50', 'count': 6},
+                'prop-005': {'total': '1500.00', 'count': 2}
+            }
         }
         
-        mock_property_data = mock_data.get(property_id, {'total': '0.00', 'count': 0})
+        tenant_mock_data = mock_data.get(tenant_id, {})
+        mock_property_data = tenant_mock_data.get(property_id, {'total': '0.00', 'count': 0})
         
         return {
             "property_id": property_id,
